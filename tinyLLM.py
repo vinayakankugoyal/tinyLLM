@@ -256,6 +256,10 @@ def train(data, params, optimizer, optimizer_state, rand_key):
 
 def generate(params, prompt, length, rand_key, encode, decode):
     inputs = encode(prompt)
+
+    # Print the prompt first
+    print(prompt, end='', flush=True)
+
     for i in range(length):
         # inputs is just an array we need to convert it int (1, CONTEXT_LENGTH)
 
@@ -263,7 +267,7 @@ def generate(params, prompt, length, rand_key, encode, decode):
 
         padded = jax.numpy.zeros(CONTEXT_LENGTH, dtype=jax.numpy.int32)
 
-        # the token length could exceed the context length upon generation so 
+        # the token length could exceed the context length upon generation so
         # remove the intial tokens
         tokens_to_include = jax.numpy.array(inputs[-CONTEXT_LENGTH:])
 
@@ -272,7 +276,7 @@ def generate(params, prompt, length, rand_key, encode, decode):
         padded = padded.at[:len(tokens_to_include)].set(tokens_to_include)
 
         logits = forward(params, padded[None, :]) # this add the extra batch dimension
-        
+
         predictions = logits[0, len(tokens_to_include) - 1]
 
         rand_key, subkey = jax.random.split(rand_key)
@@ -281,7 +285,11 @@ def generate(params, prompt, length, rand_key, encode, decode):
 
         inputs.append(int(prdiction))
 
-    print(decode(inputs))
+        # Print each new token as it's generated
+        print(decode([int(prdiction)]), end='', flush=True)
+
+    # Print newline at the end
+    print()
 
 def print_model_size(params):
     totals = params['token_embedding'].size
