@@ -43,7 +43,18 @@ Runs for 10,000 steps and saves weights to `params.pkl`.
 ### Inference
 
 ```bash
-python tinyLLM.py --inference --prompt "First Citizen:"
+[nix-shell:~/projects/tinyLLM]$ python tinyLLM.py --inference --prompt "to be or not to be" --length 200
+total model params: 824064
+to be or not to be.
+
+First Senator:
+For I be you; fellow present in your highness,
+I hear my friend count and clears,
+I both prince, give me sooth and with our soul.
+
+LADY CAPULET:
+O holy wrong up yout to or as little
+
 ```
 
-Generates 100 tokens from the given prompt using the trained model.
+Generates tokens from the given prompt using the trained model.
