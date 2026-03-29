@@ -20,10 +20,17 @@ This is an educational implementation of a decoder-only transformer, similar in 
 ### Training
 
 ```bash
+usage: tinyLLM.py [-h] (--train | --inference) [--input INPUT] [--prompt PROMPT] [--length LENGTH]
 
-nix-shell
+A tiny model
 
-python tinyLLM.py --train
+options:
+  -h, --help       show this help message and exit
+  --train
+  --inference
+  --input INPUT    Path to input training data file
+  --prompt PROMPT
+  --length LENGTH
 ```
 
 Runs for 10,000 steps and saves weights to `params.pkl`.

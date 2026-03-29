@@ -4,29 +4,25 @@ import optax
 import pickle
 import argparse
 
-# read in the input data set and explore it a little
-with open("./input.txt", "r") as f:
-    text = f.read()
+def load_data(input_path):
+    with open(input_path, "r") as f:
+        text = f.read()
 
-sorted_chars = sorted(set(text))
+    sorted_chars = sorted(set(text))
+    char_to_encoding = {c: i for i, c in enumerate(sorted_chars)}
+    encoding_to_char = {i: c for i, c in enumerate(sorted_chars)}
 
-char_to_encoding = {c: i for i, c in enumerate(sorted_chars)}
+    def encode(text: str) -> list[int]:
+        return [char_to_encoding[c] for c in text]
 
-encoding_to_char = {i: c for i, c in enumerate(sorted_chars)}
+    def decode(encoding: list[int]) -> str:
+        return "".join([encoding_to_char[i] for i in encoding])
 
-def encode(text: str) -> list[int]:
-    return [char_to_encoding[c] for c in text]
-
-def decode(encoding: list[int]) -> str:
-    return "".join([encoding_to_char[i] for i in encoding])
+    return text, encode, decode, char_to_encoding, encoding_to_char
 
 CONTEXT_LENGTH = 128
 BATCH_SIZE = 32
 VOCABULARY = 65
-
-encoded_data = encode(text)
-
-encoded_data_numpy = jax.numpy.array(encoded_data)
 
 rand_key = jax.random.key(42)
 
@@ -258,7 +254,7 @@ def train(data, params, optimizer, optimizer_state, rand_key):
     return params
 
 
-def generate(params, prompt, length, rand_key):
+def generate(params, prompt, length, rand_key, encode, decode):
     inputs = encode(prompt)
     for i in range(length):
         # inputs is just an array we need to convert it int (1, CONTEXT_LENGTH)
@@ -318,7 +314,9 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--train', action='store_true')
     group.add_argument('--inference', action='store_true')
+    parser.add_argument('--input', type=str, default='./input.txt', help='Path to input training data file')
     parser.add_argument('--prompt', type=str)
+    parser.add_argument('--length', type=int, default=100)
 
     args = parser.parse_args()
 
@@ -330,6 +328,9 @@ def main():
 
 
     if args.train:
+        text, encode, decode, char_to_encoding, encoding_to_char = load_data(args.input)
+        encoded_data_numpy = jax.numpy.array(encode(text))
+
         params = init_params(rand_key)
 
         print_model_size(params)
@@ -340,15 +341,22 @@ def main():
         params = train(encoded_data_numpy, params, optimizer, optimizer_state, rand_key)
 
         with open("./params.pkl", "wb") as f:
-            pickle.dump(params, f)
+            pickle.dump({'params': params, 'char_to_encoding': char_to_encoding, 'encoding_to_char': encoding_to_char}, f)
 
     elif args.inference:
         with open("./params.pkl", "rb") as f:
-            params = pickle.load(f)
+            checkpoint = pickle.load(f)
+
+        params = checkpoint['params']
+        char_to_encoding = checkpoint['char_to_encoding']
+        encoding_to_char = checkpoint['encoding_to_char']
+
+        encode = lambda text: [char_to_encoding[c] for c in text]
+        decode = lambda encoding: "".join([encoding_to_char[i] for i in encoding])
 
         print_model_size(params)
 
-        generate(params, args.prompt, 100, rand_key)
+        generate(params, args.prompt, args.length, rand_key, encode, decode)
 
 if __name__ == "__main__":
     main()
