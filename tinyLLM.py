@@ -312,11 +312,12 @@ def main():
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--train', action='store_true')
-    group.add_argument('--inference', action='store_true')
+    group.add_argument('--train', action='store_true', help='Train the model on input data')
+    group.add_argument('--inference', action='store_true', help='Generate text using a trained model')
     parser.add_argument('--input', type=str, default='./input.txt', help='Path to input training data file')
-    parser.add_argument('--prompt', type=str)
-    parser.add_argument('--length', type=int, default=100)
+    parser.add_argument('--params', type=str, default='./params.pkl', help='Path to model parameters file')
+    parser.add_argument('--prompt', type=str, help='Starting text for generation (required for inference)')
+    parser.add_argument('--length', type=int, default=100, help='Number of tokens to generate')
 
     args = parser.parse_args()
 
@@ -340,11 +341,11 @@ def main():
 
         params = train(encoded_data_numpy, params, optimizer, optimizer_state, rand_key)
 
-        with open("./params.pkl", "wb") as f:
+        with open(args.params, "wb") as f:
             pickle.dump({'params': params, 'char_to_encoding': char_to_encoding, 'encoding_to_char': encoding_to_char}, f)
 
     elif args.inference:
-        with open("./params.pkl", "rb") as f:
+        with open(args.params, "rb") as f:
             checkpoint = pickle.load(f)
 
         params = checkpoint['params']

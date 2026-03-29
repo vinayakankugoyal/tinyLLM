@@ -17,20 +17,25 @@ This is an educational implementation of a decoder-only transformer, similar in 
 
 ## Usage
 
-### Training
-
 ```bash
-usage: tinyLLM.py [-h] (--train | --inference) [--input INPUT] [--prompt PROMPT] [--length LENGTH]
+usage: tinyLLM.py [-h] (--train | --inference) [--input INPUT] [--params PARAMS] [--prompt PROMPT] [--length LENGTH]
 
 A tiny model
 
 options:
   -h, --help       show this help message and exit
-  --train
-  --inference
+  --train          Train the model on input data
+  --inference      Generate text using a trained model
   --input INPUT    Path to input training data file
-  --prompt PROMPT
-  --length LENGTH
+  --params PARAMS  Path to model parameters file
+  --prompt PROMPT  Starting text for generation (required for inference)
+  --length LENGTH  Number of tokens to generate
+```
+
+### Training
+
+```
+python tinyLLM.py --train
 ```
 
 Runs for 10,000 steps and saves weights to `params.pkl`.
