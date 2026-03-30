@@ -29,17 +29,48 @@ rand_key = jax.random.key(42)
 def get_batch(encoded_data_numpy, rng_key):
     starting_positions = jax.random.randint(rng_key, (BATCH_SIZE,), 0, len(encoded_data_numpy) - CONTEXT_LENGTH - 1)
 
-    inputs = []
-    outputs = []
+    """
+    this converts 
+    
+    [1, 22, 20, 15, 3, 19, 13, 9, 21, 5]
+    
+    to
+    
+    [[1],
+     [22],
+     [15],
+     ...
+    ]
+    """
+    stacked_starting_postions = starting_positions[:, None]
 
-    for sp in starting_positions:
-        input_data = encoded_data_numpy[sp:sp + CONTEXT_LENGTH + 1]
-        output_data = input_data[1:]
+    """ 
+    jax.numpy.arrange(5+1) is just [0 1 2 3 4 5]
 
-        inputs.append(input_data[:-1])
-        outputs.append(output_data)
+    when you add it to stacked_starting_positions you get something like
 
-    return (jax.numpy.stack(inputs), jax.numpy.stack(outputs))
+    [
+     [1, 2 ,3, 4, 5, 6]
+     [22, 23, 24, 25, 26, 27]
+     [15, 16, 17, 18, 19, 20]
+     ....
+    ]
+    """
+
+    indices = stacked_starting_postions + jax.numpy.arange(CONTEXT_LENGTH + 1)
+
+    # this is going to be (BATCH_SIZE, CONTEXT_LENGTH + 1)
+    stacked = encoded_data_numpy[indices]
+
+    # take all the batches but skip the last element of each batch so that 
+    # we get (BATCH_SIZE, CONTEXT_LENGTH)
+    inputs = stacked[:,:-1]
+
+    # take all the batches but skip the first element of each batch so that
+    # we get (BATCH_SIZE, CONTEXT_LENGTH)
+    outputs = stacked[:,1:]
+
+    return (inputs, outputs)
 
 rand_key, subkey = jax.random.split(rand_key)
 
