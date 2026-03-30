@@ -6,6 +6,7 @@ pkgs.mkShellNoCC {
             ps.jax
             ps.optax
         ]))
+        pkgs.ruff
     ];
     shellHook = ''
         echo "Welcome to tinyLLM!"
