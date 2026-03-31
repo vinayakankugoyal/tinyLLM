@@ -132,36 +132,44 @@ HEAD_DIM = EMBED_DIM // NUM_HEADS
 
 # inputs is always just (1, 1, EMBED_DIM)
 # we have a single batch with just one new token
-def multihead_attention_cached(params, inputs, pre_K, pre_V):
+# k_cache, v_cache are (1, CONTEXT_LENGTH, EMBED_DIM)
+def multihead_attention_cached(params, inputs, position, k_cache, v_cache):
     batch_size = inputs.shape[0]
     context_length = inputs.shape[1]
-
+ 
     Q = inputs @ params["W_q"]
-    K = jax.numpy.concatenate([pre_K, inputs[:, -1:] @ params["W_k"]], axis=1)
-    V = jax.numpy.concatenate([pre_V, inputs[:, -1:] @ params["W_v"]], axis=1)
+    K_new = inputs @ params["W_k"]
+    V_new = inputs @ params["W_v"]
 
-    kv_length = K.shape[1]
+    k_cache = k_cache.at[:, position].set(K_new[:, 0])
+    v_cache = v_cache.at[:, position].set(V_new[:, 0])
 
-    Q = jax.numpy.reshape(Q, (batch_size, context_length, NUM_HEADS, HEAD_DIM))
+    Q = jax.numpy.reshape(Q, (batch_size, 1, NUM_HEADS, HEAD_DIM))
     Q = Q.transpose(0, 2, 1, 3)
-    K_new = jax.numpy.reshape(K, (batch_size, kv_length, NUM_HEADS, HEAD_DIM))
-    K_new = K_new.transpose(0, 2, 1, 3)
-    V_new = jax.numpy.reshape(V, (batch_size, kv_length, NUM_HEADS, HEAD_DIM))
-    V_new = V_new.transpose(0, 2, 1, 3)
+    K = jax.numpy.reshape(k_cache, (batch_size, CONTEXT_LENGTH, NUM_HEADS, HEAD_DIM))
+    K = K.transpose(0, 2, 1, 3)
+    V = jax.numpy.reshape(v_cache, (batch_size, CONTEXT_LENGTH, NUM_HEADS, HEAD_DIM))
+    V = V.transpose(0, 2, 1, 3)
 
     # attention scores
 
-    attention_score = Q @ K_new.transpose(0, 1, 3, 2)
+    attention_score = Q @ K.transpose(0, 1, 3, 2)
 
     # scale attention scores otherwise gradients will vanish
 
     attention_score = attention_score / (HEAD_DIM**0.5)
 
-    # The causal mask is skipped
+    # causal mask so that we only look at the previos tokens
+    causal_mask = jax.numpy.where(
+        jax.numpy.arange(CONTEXT_LENGTH) > position, 
+        -jax.numpy.inf,
+        0.0
+    )
+    attention_score = attention_score + causal_mask
 
     attention_weights = jax.nn.softmax(attention_score)
 
-    weighted_sum = attention_weights @ V_new
+    weighted_sum = attention_weights @ V
 
     # convert back to original shape
     weighted_sum = weighted_sum.transpose(
@@ -172,7 +180,7 @@ def multihead_attention_cached(params, inputs, pre_K, pre_V):
         weighted_sum, (batch_size, context_length, EMBED_DIM)
     )
 
-    return (weighted_sum @ params["W_o"], K, V)
+    return (weighted_sum @ params["W_o"], k_cache, v_cache)
 
 
 def multihead_attention(params, inputs):
@@ -312,9 +320,9 @@ def layer_norm(params, x, eps=1e-5):
     return params["gamma"] * x_nomalized + params["beta"]
 
 
-def transformer_block_decode(params, x, pre_K=None, pre_V=None):
+def transformer_block_decode(params, x, position, pre_K, pre_V):
     attention, K, V = multihead_attention_cached(
-        params, layer_norm(params["ln1"], x), pre_K, pre_V
+        params, layer_norm(params["ln1"], x), position, pre_K, pre_V
     )
     x = x + attention
     x = x + ffn(params, layer_norm(params["ln2"], x))
@@ -343,22 +351,31 @@ def forward(params, inputs):
 def forward_prefill(params, inputs):
     x = embed_prefill(params, inputs)
 
+    batch_size = inputs.shape[0]
+    prompt_length = inputs.shape[1]
+
     kvs = []
     for block_params in params["blocks"]:
         x, K, V = transformer_block(block_params, x)
-        kvs.append((K, V))
+        k_cache = jax.numpy.zeros((batch_size, CONTEXT_LENGTH, EMBED_DIM))
+        v_cache = jax.numpy.zeros((batch_size, CONTEXT_LENGTH, EMBED_DIM))
+
+        k_cache = k_cache.at[:, :prompt_length].set(K)
+        v_cache = v_cache.at[:, :prompt_length].set(V)
+
+        kvs.append((k_cache, v_cache))
 
     return (x @ params["W_o"], kvs)
 
-
+@jax.jit
 def forward_decode(params, inputs, position, kvs):
     # simulate actual position
     x = embed_at(params, inputs, position)
 
     new_kvs = []
     for i, block_params in enumerate(params["blocks"]):
-        x, K, V = transformer_block_decode(block_params, x, kvs[i][0], kvs[i][1])
-        new_kvs.append((K, V))
+        x, k_cache, v_cache = transformer_block_decode(block_params, x, position, kvs[i][0], kvs[i][1])
+        new_kvs.append((k_cache, v_cache))
 
     return (x @ params["W_o"], new_kvs)
 
