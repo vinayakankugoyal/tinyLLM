@@ -413,13 +413,16 @@ def train(data, params, optimizer, optimizer_state, rand_key):
 
 
 def generate(params, prompt, rand_key, encode, decode):
-    inputs = encode(prompt)
-
     if len(prompt) >= CONTEXT_LENGTH:
         print("prompt is longer than context length 128")
 
     # Print the prompt first
     print(prompt, end="", flush=True)
+
+    token_times = []
+    token_start = datetime.now()
+
+    inputs = encode(prompt)
 
     # note: the [None, :] is to add a batch dimension
     logits, kvs = forward_prefill(params, jax.numpy.array(inputs)[None, :])
@@ -431,11 +434,16 @@ def generate(params, prompt, rand_key, encode, decode):
 
     prediction = jax.random.categorical(subkey, predictions / 0.8)
 
+    token_end = datetime.now()
+    token_times.append((token_end-token_start).total_seconds() * 1000)
+
     # Print the first generated token
     # This is measure of time to first token!
     print(decode([int(prediction)]), end="", flush=True)
 
     for i in range(len(prompt), CONTEXT_LENGTH):
+        token_start = datetime.now()
+
         next_token = jax.numpy.array([int(prediction)])
         logits, kvs = forward_decode(
             params, next_token[None, :], i, kvs
@@ -447,11 +455,21 @@ def generate(params, prompt, rand_key, encode, decode):
 
         prediction = jax.random.categorical(subkey, predictions / 0.8)
 
+        token_end = datetime.now()
+        token_times.append((token_end-token_start).total_seconds() * 1000)
+
         # Print each new token as it's generated
         print(decode([int(prediction)]), end="", flush=True)
 
+    ttft = token_times[0]  # Time to First Token (ms)
+    tpot = sum(token_times[1:]) / (len(token_times) -1)  # Time Per Output Token (ms)
+    avg_itl = tpot  # Inter-Token Latencies is bacially tpot for a single request
+
     # Print newline at the end
-    print()
+    print(f"TTFT: {ttft:.2f}ms")
+    print(f"TPOT: {tpot:.2f}ms")
+    print(f"Avg ITL: {avg_itl:.2f}ms")
+    print(f"E2EL: {sum(token_times):.2f}ms")
 
 
 def print_model_size(params):
