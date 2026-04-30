@@ -2,28 +2,12 @@ import jax
 import optax
 import pickle
 import argparse
+from datetime import datetime
+import tokenizer
 
 
-def load_data(input_path):
-    with open(input_path, "r") as f:
-        text = f.read()
-
-    sorted_chars = sorted(set(text))
-    char_to_encoding = {c: i for i, c in enumerate(sorted_chars)}
-    encoding_to_char = {i: c for i, c in enumerate(sorted_chars)}
-
-    def encode(text: str) -> list[int]:
-        return [char_to_encoding[c] for c in text]
-
-    def decode(encoding: list[int]) -> str:
-        return "".join([encoding_to_char[i] for i in encoding])
-
-    return text, encode, decode, char_to_encoding, encoding_to_char
-
-
-CONTEXT_LENGTH = 128
-BATCH_SIZE = 32
-VOCABULARY = 65
+CONTEXT_LENGTH = 256
+BATCH_SIZE = 64
 
 rand_key = jax.random.key(42)
 
@@ -136,7 +120,7 @@ HEAD_DIM = EMBED_DIM // NUM_HEADS
 def multihead_attention_cached(params, inputs, position, k_cache, v_cache):
     batch_size = inputs.shape[0]
     context_length = inputs.shape[1]
- 
+
     Q = inputs @ params["W_q"]
     K_new = inputs @ params["W_k"]
     V_new = inputs @ params["W_v"]
@@ -161,9 +145,7 @@ def multihead_attention_cached(params, inputs, position, k_cache, v_cache):
 
     # causal mask so that we only look at the previos tokens
     causal_mask = jax.numpy.where(
-        jax.numpy.arange(CONTEXT_LENGTH) > position, 
-        -jax.numpy.inf,
-        0.0
+        jax.numpy.arange(CONTEXT_LENGTH) > position, -jax.numpy.inf, 0.0
     )
     attention_score = attention_score + causal_mask
 
@@ -237,12 +219,12 @@ def ffn(params, x):
 NUM_ATTENTION_BLOCKS = 4
 
 
-def init_params(rand_key):
+def init_params(rand_key, vocabulary):
     params = {}
 
     rand_key, subkey = jax.random.split(rand_key)
     # mapping of each token to what its vector representation is
-    embedding = jax.random.normal(subkey, (VOCABULARY, EMBED_DIM)) * 0.02
+    embedding = jax.random.normal(subkey, (vocabulary, EMBED_DIM)) * 0.02
 
     params["token_embedding"] = embedding
 
@@ -303,7 +285,7 @@ def init_params(rand_key):
     params["blocks"] = tuple(params["blocks"])
     # The final W_o needs to take use from embeddings and map to vocabulary (so that model returns the actual output)
     rand_key, subkey = jax.random.split(rand_key)
-    W_o = jax.random.normal(subkey, (EMBED_DIM, VOCABULARY)) * 0.02
+    W_o = jax.random.normal(subkey, (EMBED_DIM, vocabulary)) * 0.02
 
     params["W_o"] = W_o
 
@@ -367,6 +349,7 @@ def forward_prefill(params, inputs):
 
     return (x @ params["W_o"], kvs)
 
+
 @jax.jit
 def forward_decode(params, inputs, position, kvs):
     # simulate actual position
@@ -374,7 +357,9 @@ def forward_decode(params, inputs, position, kvs):
 
     new_kvs = []
     for i, block_params in enumerate(params["blocks"]):
-        x, k_cache, v_cache = transformer_block_decode(block_params, x, position, kvs[i][0], kvs[i][1])
+        x, k_cache, v_cache = transformer_block_decode(
+            block_params, x, position, kvs[i][0], kvs[i][1]
+        )
         new_kvs.append((k_cache, v_cache))
 
     return (x @ params["W_o"], new_kvs)
@@ -412,7 +397,7 @@ def train(data, params, optimizer, optimizer_state, rand_key):
     return params
 
 
-def generate(params, prompt, rand_key, encode, decode):
+def generate(params, prompt, rand_key, tok):
     if len(prompt) >= CONTEXT_LENGTH:
         print("prompt is longer than context length 128")
 
@@ -422,7 +407,7 @@ def generate(params, prompt, rand_key, encode, decode):
     token_times = []
     token_start = datetime.now()
 
-    inputs = encode(prompt)
+    inputs = tok.encode(prompt)
 
     # note: the [None, :] is to add a batch dimension
     logits, kvs = forward_prefill(params, jax.numpy.array(inputs)[None, :])
@@ -435,11 +420,11 @@ def generate(params, prompt, rand_key, encode, decode):
     prediction = jax.random.categorical(subkey, predictions / 0.8)
 
     token_end = datetime.now()
-    token_times.append((token_end-token_start).total_seconds() * 1000)
+    token_times.append((token_end - token_start).total_seconds() * 1000)
 
     # Print the first generated token
     # This is measure of time to first token!
-    print(decode([int(prediction)]), end="", flush=True)
+    print(tok.decode([int(prediction)]), end="", flush=True)
 
     for i in range(len(prompt), CONTEXT_LENGTH):
         token_start = datetime.now()
@@ -456,16 +441,19 @@ def generate(params, prompt, rand_key, encode, decode):
         prediction = jax.random.categorical(subkey, predictions / 0.8)
 
         token_end = datetime.now()
-        token_times.append((token_end-token_start).total_seconds() * 1000)
+        token_times.append((token_end - token_start).total_seconds() * 1000)
 
         # Print each new token as it's generated
-        print(decode([int(prediction)]), end="", flush=True)
+        print(tok.decode([int(prediction)]), end="", flush=True)
 
     ttft = token_times[0]  # Time to First Token (ms)
-    tpot = sum(token_times[1:]) / (len(token_times) -1)  # Time Per Output Token (ms)
+    tpot = sum(token_times[1:]) / (len(token_times) - 1)  # Time Per Output Token (ms)
     avg_itl = tpot  # Inter-Token Latencies is bacially tpot for a single request
 
     # Print newline at the end
+    print()
+    print()
+    print("### Stats for nerds ###")
     print(f"TTFT: {ttft:.2f}ms")
     print(f"TPOT: {tpot:.2f}ms")
     print(f"Avg ITL: {avg_itl:.2f}ms")
@@ -501,43 +489,76 @@ def main():
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
-        "--train", action="store_true", help="Train the model on input data"
+        "--tokenize", action="store_true", help="Tokenize input data and save to pkl"
+    )
+    group.add_argument(
+        "--train", action="store_true", help="Train the model using tokenized data"
     )
     group.add_argument(
         "--inference", action="store_true", help="Generate text using a trained model"
     )
+
     parser.add_argument(
         "--input",
         type=str,
         default="./input.txt",
-        help="Path to input training data file",
+        help="Path to input training data file (for --tokenize)",
     )
+
     parser.add_argument(
-        "--params",
+        "--tokenizer_params",
         type=str,
-        default="./params.pkl",
+        default="./tokenizer_params.pkl",
+        help="Path to tokenizer params file",
+    )
+
+    parser.add_argument(
+        "--model_params",
+        type=str,
+        default="./model_params.pkl",
         help="Path to model parameters file",
     )
+
     parser.add_argument(
         "--prompt",
         type=str,
-        help="Starting text for generation (required for inference)",
+        help="Starting text for generation (required for --inference)",
     )
 
     args = parser.parse_args()
 
+    if args.tokenize and args.prompt:
+        parser.error("--tokenize doesn't use --prompt")
+
     if args.train and args.prompt:
-        parser.error("--train doesn't accept any other arguments")
+        parser.error("--train doesn't use --prompt")
 
     if args.inference and not args.prompt:
         parser.error("--inference requires --prompt")
 
-    if args.train:
-        text, encode, decode, char_to_encoding, encoding_to_char = load_data(args.input)
-        encoded_data_numpy = jax.numpy.array(encode(text))
+    if args.tokenize:
+        print(f"Tokenizing data from {args.input}...")
 
-        params = init_params(rand_key)
+        tok = tokenizer.create(args.input)
+        print(f"Tokenizer vocab size: {tok.vocab_size()}")
 
+        with open(args.input, "r") as f:
+            text = f.read()
+
+        tok.save(args.tokenizer_params)
+        print(f"Saved tokenizer to {args.tokenizer_params}")
+
+    elif args.train:
+        print(f"Loading tokenizer from {args.tokenizer_params}...")
+        tok = tokenizer.load(args.tokenizer_params)
+        print(f"Tokenizer vocab size: {tok.vocab_size()}")
+
+        with open(args.input, "r") as f:
+            text = f.read()
+        encoded_data_numpy = jax.numpy.array(tok.encode(text))
+        print(f"Training on {len(encoded_data_numpy)} tokens")
+
+        params = init_params(rand_key, tok.vocab_size())
         print_model_size(params)
 
         optimizer = optax.adam(learning_rate=3e-4)
@@ -545,30 +566,27 @@ def main():
 
         params = train(encoded_data_numpy, params, optimizer, optimizer_state, rand_key)
 
-        with open(args.params, "wb") as f:
-            pickle.dump(
-                {
-                    "params": params,
-                    "char_to_encoding": char_to_encoding,
-                    "encoding_to_char": encoding_to_char,
-                },
-                f,
-            )
+        with open(args.model_params, "wb") as f:
+            pickle.dump({"params": params}, f)
+        print(f"Saved model to {args.model_params}")
 
     elif args.inference:
-        with open(args.params, "rb") as f:
+        print(f"### Loading model from {args.model_params}... ###")
+        with open(args.model_params, "rb") as f:
             checkpoint = pickle.load(f)
-
         params = checkpoint["params"]
-        char_to_encoding = checkpoint["char_to_encoding"]
-        encoding_to_char = checkpoint["encoding_to_char"]
-
-        encode = lambda text: [char_to_encoding[c] for c in text]
-        decode = lambda encoding: "".join([encoding_to_char[i] for i in encoding])
 
         print_model_size(params)
+        print()
 
-        generate(params, args.prompt, rand_key, encode, decode)
+        print(f"### Loading tokenizer from {args.tokenizer_params}... ###")
+        tok = tokenizer.load(args.tokenizer_params)
+        print(f"Tokenizer vocab size: {tok.vocab_size()}")
+        print()
+
+        print(f"### Generating... ###")
+        print()
+        generate(params, args.prompt, rand_key, tok)
 
 
 if __name__ == "__main__":
